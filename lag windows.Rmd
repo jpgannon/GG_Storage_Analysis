@@ -1,0 +1,266 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Window'ed lag periods
+
+
+Load packages
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(rnoaa)
+library(corrplot)
+library(gridExtra)
+library(corrr)
+library(TTR)
+library(zoo)
+library(xts)
+library(tidyquant)
+library(RColorBrewer)
+```
+
+Load discharge record and precip
+```{r}
+dat <- read_csv("GribbleGap_Discharge_Record_Full_Clean.csv")
+P <- read_csv("Cullowhee_Precip_Daily.csv")
+```
+
+Compute daily, weekly, monthly, yearly discharge timeseries
+```{r}
+#daily
+dat %>% group_by(day(time), month(time), year(time)) %>%
+    summarize(median(disch)) -> daily
+
+colnames(daily) <- c("day","month","year","medQ")  
+
+daily$date <- dmy(paste(daily$day, daily$month, daily$year))
+
+daily <- ungroup(daily)
+daily <- select(daily, date, medQ)
+
+#weekly
+dat %>% group_by(week(time), year(time)) %>%
+    summarize(median(disch)) -> weekly
+
+colnames(weekly) <- c("week","year","medQ")  
+
+weekly$date <- as.Date(
+  paste(weekly$year, weekly$week, 1),
+  format = "%Y %U %u"
+)
+
+weekly <- ungroup(weekly)
+weekly <- select(weekly, date, medQ)
+
+#monthly
+dat %>% group_by(month(time), year(time)) %>%
+    summarize(median(disch)) -> monthly
+
+colnames(monthly) <- c("month","year","medQ")  
+
+monthly$date <- dmy(paste(1,monthly$month, monthly$year))
+
+monthly <- ungroup(monthly)
+monthly <- select(monthly, date, medQ)
+
+#water-yearly
+
+#define water year
+#in this script or another, define a water year function
+#2016 water year is 10-01-2015 - 9-30-2016
+ water_year <- function(date) {
+               ifelse(month(date) < 10, year(date), year(date)+1)}
+ 
+ 
+dat %>% group_by(water_year(time)) %>%
+    summarize(median(disch, na.rm = TRUE)) -> yearly
+
+colnames(yearly) <- c("year","medQ")  
+
+yearly$date <- dmy(paste(1,1, yearly$year))
+
+yearly <- ungroup(yearly)
+yearly <- select(yearly, date, medQ)
+
+#PRECIP
+
+#daily
+dailyP <- P
+
+#daily
+P %>% group_by(day(date), month(date), year(date)) %>%
+    summarize(sum(Pmm)) -> dailyP
+
+colnames(dailyP) <- c("day","month","year","Pmm")  
+
+dailyP$date <- dmy(paste(dailyP$day, dailyP$month, dailyP$year))
+
+dailyP <- ungroup(dailyP)
+dailyP <- select(dailyP, date, Pmm)
+
+#weekly
+P %>% group_by(week(date), year(date)) %>%
+    summarize(sum(Pmm)) -> weeklyP
+
+colnames(weeklyP) <- c("week","year","Pmm")  
+
+weeklyP$date <- as.Date(
+  paste(weeklyP$year, weeklyP$week, 1),
+  format = "%Y %U %u"
+)
+
+weeklyP <- ungroup(weeklyP)
+weeklyP <- select(weeklyP, date, Pmm)
+
+#monthly
+P %>% group_by(month(date), year(date)) %>%
+    summarize(sum(Pmm)) -> monthlyP
+
+colnames(monthlyP) <- c("month","year","Pmm")  
+
+monthlyP$date <- dmy(paste(1,monthlyP$month, monthlyP$year))
+
+monthlyP <- ungroup(monthlyP)
+monthlyP <- select(monthlyP, date, Pmm)
+
+
+#yearly -> should probably be water year
+water_year <- function(date) {
+               ifelse(month(date) < 10, year(date), year(date)+1)}
+
+P %>% group_by(water_year(date)) %>%
+    summarize(sum(Pmm)) -> yearlyP
+
+colnames(yearlyP) <- c("year","Pmm")  
+
+yearlyP$date <- dmy(paste(1,1, yearlyP$year))
+
+yearlyP <- ungroup(yearlyP)
+yearlyP <- select(yearlyP, date, Pmm)
+
+#combine
+#combine P and Q for each time bin THEN bind rows
+bdaily <- inner_join(daily, dailyP, by = "date")
+bweekly <- inner_join(weekly, weeklyP, by = "date")
+bmonthly <- inner_join(monthly, monthlyP, by = "date")
+byearly <- inner_join(yearly, yearlyP, by = "date")
+
+periods <- bind_rows("daily" = bdaily,"weekly" = bweekly,
+                     "monthly" = bmonthly,"yearly" = byearly,
+                     .id = "Period")
+
+periods$Period <- factor(periods$Period, 
+                         levels = c("daily", "weekly", "monthly", "yearly"))
+
+toplot <- periods %>% group_by(Period)
+
+toplot$lag1 <- lag(toplot$Pmm, 1)
+toplot$lag2 <- lag(toplot$Pmm, 2)
+toplot$lag3 <- lag(toplot$Pmm, 3)
+toplot$lag4 <- lag(toplot$Pmm, 4)
+toplot$lag5 <- lag(toplot$Pmm, 5)
+toplot$lag6 <- lag(toplot$Pmm, 6)
+
+periods <- drop_na(toplot)
+
+```
+
+
+```{r}
+
+winsize <- 7
+
+periods <- filter(periods, Period != "yearly")
+
+#runCor
+periods <- drop_na(periods)
+
+CP <-periods %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = Pmm,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corCur"
+)
+
+CP <-CP %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = lag1,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corLag1"
+)
+
+CP <-CP %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = lag2,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corLag2"
+)
+
+CP <-CP %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = lag3,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corLag3"
+)
+
+CP <-CP %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = lag4,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corLag4"
+)
+
+CP <-CP %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = lag5,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corLag5"
+)
+CP <-CP %>% group_by(Period) %>% tq_mutate_xy(
+  x = medQ,
+  y = lag6,
+  mutate_fun = runCor,
+  #runCor
+  n = winsize,
+  #tqmutate
+  col_rename = "corLag6"
+)
+```
+
+```{r, fig.height=8}
+CP2 <- CP[,-c(5:10)]
+
+CP2 <- CP2 %>% pivot_longer(cols = c("corCur","corLag1","corLag2","corLag3","corLag4","corLag5","corLag6"), names_to = "LagCor")
+#weekly 
+per <- "monthly"
+
+CP2 %>% filter(Period == per) %>%
+ggplot(aes(x = date, y = medQ, color = value))+
+  geom_line(size = 2)+
+  scale_color_gradient2(low = "blue", high = "red", mid = "white")+
+  facet_grid(rows = vars(LagCor), scales = "free_y")
+```
+
+
+

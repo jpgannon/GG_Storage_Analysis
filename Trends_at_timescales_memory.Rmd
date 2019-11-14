@@ -1,0 +1,327 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Drought was roughly April 2016 - June 2017
+
+Load packages
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(rnoaa)
+library(corrplot)
+library(gridExtra)
+library(corrr)
+```
+
+Load discharge record
+```{r}
+dat <- read_csv("GribbleGap_Discharge_Record_Full_Clean.csv")
+```
+Get Precip Data DON'T RUN, HERE TO PRESERVE HOW DATA WAS DOWNLOADED
+```{r}
+api <- "sCfMUOqzUYDuKbFBzDcXRqpvdDfCmdiw"
+loc <- 'GHCND:USC00312200' #cullowhee
+
+ncdc_stations(stationid = loc, token = api)$data$name
+
+years <- c(2014,2015,2016,2017,2018)
+
+for(x in years){
+
+P <- ncdc(datasetid='GHCND', datatypeid = "PRCP", stationid = loc, token = api,
+     startdate = paste(x,'-09-30', sep = ''), 
+     enddate = paste(x+1,'-09-30', sep = ''), 
+     limit = 365)
+
+if(x == 2014) Pall <- P
+
+if(x > 2014) Pall <- bind_rows(Pall, P)
+#Pall_BU <- Pall
+}
+
+Pall <- select(Pall, date, value)
+Pall <- drop_na(Pall)
+Pall$Pmm <- Pall$value / 10
+write.csv(Pall, "Cullowhee_Precip_Daily.csv")
+```
+
+Read in Precip Data
+```{r}
+P <- read_csv("Cullowhee_Precip_Daily.csv")
+
+ggplot(P, aes(x = date, y = Pmm)) + 
+  geom_bar(stat = "identity") +
+  scale_y_reverse()
+```
+
+
+Compute daily, weekly, monthly, yearly discharge timeseries
+```{r}
+#daily
+dat %>% group_by(day(time), month(time), year(time)) %>%
+    summarize(median(disch)) -> daily
+
+colnames(daily) <- c("day","month","year","medQ")  
+
+daily$date <- dmy(paste(daily$day, daily$month, daily$year))
+
+daily <- ungroup(daily)
+daily <- select(daily, date, medQ)
+
+#weekly
+dat %>% group_by(week(time), year(time)) %>%
+    summarize(median(disch)) -> weekly
+
+colnames(weekly) <- c("week","year","medQ")  
+
+weekly$date <- as.Date(
+  paste(weekly$year, weekly$week, 1),
+  format = "%Y %U %u"
+)
+
+weekly <- ungroup(weekly)
+weekly <- select(weekly, date, medQ)
+
+#monthly
+dat %>% group_by(month(time), year(time)) %>%
+    summarize(median(disch)) -> monthly
+
+colnames(monthly) <- c("month","year","medQ")  
+
+monthly$date <- dmy(paste(1,monthly$month, monthly$year))
+
+monthly <- ungroup(monthly)
+monthly <- select(monthly, date, medQ)
+
+#water-yearly
+
+#define water year
+#in this script or another, define a water year function
+#2016 water year is 10-01-2015 - 9-30-2016
+ water_year <- function(date) {
+               ifelse(month(date) < 10, year(date), year(date)+1)}
+ 
+ 
+dat %>% group_by(water_year(time)) %>%
+    summarize(median(disch, na.rm = TRUE)) -> yearly
+
+colnames(yearly) <- c("year","medQ")  
+
+yearly$date <- dmy(paste(1,1, yearly$year))
+
+yearly <- ungroup(yearly)
+yearly <- select(yearly, date, medQ)
+```
+
+Daily, weekly, monthly, yearly precip!
+```{r}
+#daily
+dailyP <- P
+
+#daily
+P %>% group_by(day(date), month(date), year(date)) %>%
+    summarize(sum(Pmm)) -> dailyP
+
+colnames(dailyP) <- c("day","month","year","Pmm")  
+
+dailyP$date <- dmy(paste(dailyP$day, dailyP$month, dailyP$year))
+
+dailyP <- ungroup(dailyP)
+dailyP <- select(dailyP, date, Pmm)
+
+#weekly
+P %>% group_by(week(date), year(date)) %>%
+    summarize(sum(Pmm)) -> weeklyP
+
+colnames(weeklyP) <- c("week","year","Pmm")  
+
+weeklyP$date <- as.Date(
+  paste(weeklyP$year, weeklyP$week, 1),
+  format = "%Y %U %u"
+)
+
+weeklyP <- ungroup(weeklyP)
+weeklyP <- select(weeklyP, date, Pmm)
+
+#monthly
+P %>% group_by(month(date), year(date)) %>%
+    summarize(sum(Pmm)) -> monthlyP
+
+colnames(monthlyP) <- c("month","year","Pmm")  
+
+monthlyP$date <- dmy(paste(1,monthlyP$month, monthlyP$year))
+
+monthlyP <- ungroup(monthlyP)
+monthlyP <- select(monthlyP, date, Pmm)
+
+
+#yearly -> should probably be water year
+water_year <- function(date) {
+               ifelse(month(date) < 10, year(date), year(date)+1)}
+
+P %>% group_by(water_year(date)) %>%
+    summarize(sum(Pmm)) -> yearlyP
+
+colnames(yearlyP) <- c("year","Pmm")  
+
+yearlyP$date <- dmy(paste(1,1, yearlyP$year))
+
+yearlyP <- ungroup(yearlyP)
+yearlyP <- select(yearlyP, date, Pmm)
+
+```
+
+
+
+Plot daily, weekly, monthly
+```{r}
+ggplot(daily, aes(date, medQ))+
+  geom_line()
+
+ggplot(weekly, aes(date, medQ))+
+  geom_point()
+
+ggplot(monthly, aes(date, medQ))+
+  geom_point()
+
+ggplot(yearly, aes(date, medQ))+
+  geom_point()
+
+ggplot(yearlyP, aes(x = date, y = Pmm)) + 
+  geom_bar(stat = "identity") +
+  scale_y_reverse()
+```
+
+Plot faceted ggplot with different time periods
+```{r, fig.height=8, fig.width = 7}
+periods <- bind_rows("daily" = daily,"weekly" = weekly,
+                     "monthly" = monthly,"yearly" = yearly,
+                     .id = "Period")
+
+periods$Period <- factor(periods$Period, 
+                         levels = c("daily", "weekly", "monthly", "yearly"))
+
+ggplot(periods, aes(x = date, y = medQ))+
+  geom_line()+
+  geom_point()+
+  scale_y_log10()+
+  facet_grid(rows = vars(periods$Period))
+```
+Discharge and precip plots
+```{r}
+#combine P and Q for each time bin THEN bind rows
+bdaily <- inner_join(daily, dailyP, by = "date")
+bweekly <- inner_join(weekly, weeklyP, by = "date")
+bmonthly <- inner_join(monthly, monthlyP, by = "date")
+byearly <- inner_join(yearly, yearlyP, by = "date")
+
+periods <- bind_rows("daily" = bdaily,"weekly" = bweekly,
+                     "monthly" = bmonthly,"yearly" = byearly,
+                     .id = "Period")
+
+periods$Period <- factor(periods$Period, 
+                         levels = c("daily", "weekly", "monthly", "yearly"))
+
+#ggplot()+
+#  geom_bar(data = periods, aes(date, -Pmm), stat = "identity")+
+#  geom_line(data = periods, aes(date, medQ))+
+#  facet_grid(Period~., scales = "free_y")
+    
+
+```
+```{r}
+int <- "weekly"
+
+Q <- ggplot(data = subset(periods, Period == int), aes(date, medQ))+
+  geom_line()
+
+P <- ggplot(data = subset(periods, Period == int), aes(date, Pmm))+
+  geom_bar(stat = "identity")
+
+grid.arrange(Q,P, nrow = 2 )
+```
+```{r}
+int <- "monthly"
+
+Q <- ggplot(data = subset(periods, Period == int), aes(date, medQ))+
+  geom_line()
+
+P <- ggplot(data = subset(periods, Period == int), aes(date, Pmm))+
+  geom_bar(data = subset(periods, Period == "yearly"), aes(date, Pmm), stat = "identity", alpha = 0.2)+
+  geom_bar(stat = "identity")+
+  scale_y_reverse()
+  
+
+grid.arrange(P,Q, nrow = 2 )
+```
+Monthly Precip vs Monthly discharge
+```{r}
+toplot <- periods %>% group_by(Period)
+
+toplot$lag1 <- lag(toplot$Pmm, 1)
+toplot$lag2 <- lag(toplot$Pmm, 2)
+toplot$lag3 <- lag(toplot$Pmm, 3)
+toplot$lag4 <- lag(toplot$Pmm, 4)
+toplot$lag5 <- lag(toplot$Pmm, 5)
+toplot$lag6 <- lag(toplot$Pmm, 6)
+
+lagswide <- drop_na(toplot)
+
+toplot <- pivot_longer(toplot, c(Pmm, lag1, lag2, lag3, lag4, lag5, lag6), names_to = "Pmm")
+
+toplot <- drop_na(toplot)
+
+toplot <- ungroup(toplot)
+
+
+ggplot(toplot, aes(value, medQ, color = Pmm))+
+  geom_smooth()+
+  ylab("Median Q (L/s)")+
+  xlab("Precip (mm)")+
+  facet_grid(rows = vars(toplot$Period))
+
+#cors <- correlate(lagswide$medQ, lagswide[,3:9])#cor(lagswide$medQ, lagswide[,3:9])
+#cors <- data.frame(t(cors))
+#colnames(cors) <- "cor"
+#cors$lag <- row.names(cors)
+#cors$lag <- factor(cors$lag, c("Pmm","lag1","lag2","lag3","lag4","lag5","lag6"))
+
+lagswide <- ungroup(lagswide)
+
+dailycor <- lagswide %>% filter(Period == "daily") 
+weeklycor <- lagswide %>% filter(Period == "weekly") 
+monthlycor <- lagswide %>% filter(Period == "monthly") 
+
+dcv <- dailycor %>% select(-date, -Period) %>%
+     correlate() %>%
+     focus(medQ)
+
+wcv <- weeklycor %>% select(-date, -Period) %>%
+     correlate() %>%
+     focus(medQ)
+
+mcv <- monthlycor %>% select(-date, -Period) %>%
+     correlate() %>%
+     focus(medQ)
+
+corsall <- bind_rows("days" = dcv, "months" = mcv, "weeks" = wcv, .id = "period")
+
+colnames(corsall) <- c("period","lag","cor")
+
+corsall$lag <- factor(corsall$lag, levels = c("Pmm", "lag1","lag2","lag3","lag4","lag5","lag6"))
+corsall$period <- factor(corsall$period, levels = c("days", "weeks","months"))
+
+#ggplot(cors, aes(lag,cor, fill = cor))+
+  #geom_bar(stat = "identity")+
+  #facet_grid(rows = vars(toplot$Period))
+```
+```{r, fig.height = 6, fig.width= 4}
+ggplot(corsall, aes(lag,cor, fill = cor))+
+  geom_bar(stat = "identity")+
+  facet_grid(rows = vars(period))+
+  theme_classic()
+```
+
+
