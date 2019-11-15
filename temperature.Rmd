@@ -1,0 +1,48 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+library(cowplot)
+
+```
+
+```{r}
+temp <- read_csv("GGheadtempdata_11_11.csv")
+
+temp$Site <- factor(temp$Site, levels = levels(factor(temp$Site)), labels = c("Trib Head 1", "Trib Head 2", "Trib Head 3"))
+
+precip <- read_csv("Cullowhee_Precip_Daily.csv")
+```
+
+
+```{r, fig.height = 8, fig.width=6}
+precip_trim <- filter(precip, date >= min(temp$rnd.dates) & date <= max(temp$rnd.dates))
+
+
+temps <- ggplot(temp, aes(x = rnd.dates, y = head.temp, color = Site))+
+  geom_line()+
+  theme_classic()+
+  theme(legend.position = "none")+
+  ylab("Temp (deg C)")+
+  xlab(element_blank())+
+  facet_wrap(facets = factor(temp$Site), nrow = 3, strip.position = "top")+
+  geom_hline(aes(yintercept = 12.94), color = "gray")
+  
+
+precpl <- ggplot(precip_trim, aes(x = date, y = Pmm)) + 
+  geom_bar(stat = "identity") +
+  scale_y_reverse()+
+  theme_classic()+
+  ylab("Precip (mm)")+
+  xlab(element_blank())
+  
+
+grid.arrange(precpl, temps, nrow = 2, heights = c(2,6))
+```
+

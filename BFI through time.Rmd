@@ -1,0 +1,172 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r, echo = FALSE}
+library(EcoHydRology)
+library(tidyverse)
+library(lubridate)
+library(tibbletime)
+library(viridis)
+```
+
+```{r}
+dat <- read_csv("GribbleGap_Discharge_Record_Full_Clean.csv")
+
+dat$mmd <- dat$GGwsd
+
+#mmd * 1440 = mmmin * 10 = mm per 10 min
+dat$mm10m <- (dat$mmd / 1440) * 10        
+
+P <- read_csv("Cullowhee_Precip_Daily.csv")
+P$date <- ymd(P$date)
+#daily
+dat %>% group_by(year(time), month(time), day(time)) %>%
+    summarize(median(disch), sum(mm10m)) -> daily
+
+colnames(daily) <- c("year","month","day","medQ","mmQ")  
+
+daily$date <- dmy(paste(daily$day, daily$month, daily$year))
+
+daily <- daily %>% ungroup() %>%
+    select(date, medQ, mmQ) %>%
+    drop_na()
+
+PQ <- inner_join(P, daily, by = "date")
+
+```
+
+Daily, weekly, monthly, yearly precip, runoff!
+```{r}
+#daily
+PQ
+
+#weekly
+PQ %>% group_by(year(date), week(date)) %>%
+    summarize(sum(Pmm), sum(mmQ)) -> weeklyPQ
+
+colnames(weeklyPQ) <- c("year","week","Pmm","Qmm")  
+
+weeklyPQ$date <- as.Date(
+  paste(weeklyPQ$year, weeklyPQ$week, 1),
+  format = "%Y %U %u"
+)
+
+weeklyPQ <- ungroup(weeklyPQ)
+weeklyPQ <- select(weeklyPQ, date, Pmm, Qmm)
+
+weeklyPQ$RR <- weeklyPQ$Qmm/weeklyPQ$Pmm
+
+#monthly
+PQ %>% group_by(year(date), month(date)) %>%
+    summarize(sum(Pmm), sum(mmQ)) -> monthlyPQ
+
+colnames(monthlyPQ) <- c("year","month","Pmm","Qmm")  
+
+monthlyPQ$date <- dmy(paste(1,monthlyPQ$month, monthlyP$year))
+
+monthlyPQ <- ungroup(monthlyPQ)
+monthlyPQ <- select(monthlyPQ, date, Pmm, Qmm)
+
+monthlyPQ$RR <- monthlyPQ$Qmm/monthlyPQ$Pmm
+
+```
+
+
+
+
+Calculate BFI on daily timestep Data
+```{r}
+BFSep <- bind_cols(daily, BaseflowSeparation(daily$medQ))
+
+#BFI = total baseflow / total runoff
+BFSep$BFI <- BFSep$bt / (BFSep$bt + BFSep$qft)
+
+allBFI <- sum(BFSep$bt) / sum(BFSep$medQ)
+
+```
+
+summarize bfi by week, month, year
+```{r}
+BFSep <- as_tbl_time(BFSep, index = date)
+
+#weekly
+BFSep %>% collapse_by("weekly") %>%
+  group_by(date) %>%
+  summarize(weekly_BFI = (sum(bt) / sum(medQ)), medQ = median(medQ), baseflow = mean(bt)) -> BFIweekly
+
+#monthly
+BFSep %>% collapse_by("monthly") %>%
+  group_by(date) %>%
+  summarize(monthly_BFI = (sum(bt) / sum(medQ)), medQ = median(medQ), baseflow = mean(bt)) -> BFImonthly
+
+#water yearly
+
+
+```
+
+```{r}
+ggplot(BFSep, aes(date, bt))+
+  geom_line(size = 2)
+
+ggplot(BFSep, aes(bt, BFI))+
+  geom_point()
+
+ggplot(BFIweekly, aes(date, medQ, color = mean_BFI))+
+  geom_line(size = 2)
+
+
+
+summary(lm(mean_BFI~medQ, BFIweekly))
+
+ggplot(BFIweekly, aes(date, baseflow, color = mean_BFI))+
+  geom_line(size = 2)
+
+ggplot(BFIweekly, aes(baseflow, mean_BFI))+
+  geom_point()
+
+ggplot(BFImonthly, aes(date, baseflow, color = mean_BFI))+
+  geom_line(size = 2)
+
+ggplot(BFImonthly, aes(baseflow, monthly_BFI))+
+  geom_point()
+```
+```{r}
+#add season column to BFI Weekly
+BFIweekly$season <- "growing"
+BFIweekly$season[month(BFIweekly$date) > 10 | month(BFIweekly$date) < 4] <- "dormant"
+
+
+#good one
+ggplot(BFIweekly, aes(y = medQ - lag(medQ, 1), x = mean_BFI, color = medQ, alpha = .3))+
+  xlab("Weekly BFI")+
+  ylab("Change in Median Weekly Discharge (L/s)")+
+  geom_point()+
+  theme_classic()+
+  scale_x_reverse()+
+  theme(legend.position = "bottom")+
+  facet_wrap(facets = factor(BFIweekly$season))
+```
+plot baseflow and precip
+```{r}
+
+
+rrplot <- ggplot(filter(monthlyPQ, RR < 2), aes(x = date, y = RR, fill = log(Qmm)))+
+  geom_bar(stat = "identity")+
+  theme_classic()+
+   theme(legend.position = "bottom")+
+  ylab("Runoff Ratio")+
+  xlab(element_blank())+
+  scale_fill_viridis()
+
+pplot <- ggplot(monthlyPQ, aes(date, Pmm))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  scale_y_reverse()+
+  xlab(element_blank())+
+  ylab("P (mm)")
+
+grid.arrange(pplot, rrplot, nrow = 2, heights = c(3,5))
+```
+
